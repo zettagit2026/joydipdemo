@@ -1,0 +1,125 @@
+{
+  "theme": "dark",
+  "archetype": "THE PERFORMANCE PRO & SWISS BRUTALIST (Tactical EW Console)",
+  "typography": {
+    "fonts": {
+      "heading": "Chivo",
+      "body": "IBM Plex Sans",
+      "mono": "JetBrains Mono"
+    },
+    "guidelines": [
+      "Use 'Chivo' with 'font-black' and 'tracking-tighter' for macro headers. Exclusively UPPERCASE.",
+      "Use 'IBM Plex Sans' for general UI body text to maintain sharp legibility.",
+      "Use 'JetBrains Mono' for ALL data points, coordinates, packet hex previews, MAVLink message types, and timestamps.",
+      "Overlines and table headers must be 'JetBrains Mono', 'text-xs', UPPERCASE, with 'tracking-widest'.",
+      "Never use generic sans-serif for numerical data; ALWAYS use tabular numbers."
+    ]
+  },
+  "colors": {
+    "background": {
+      "base": "#050810",
+      "surface": "#0C111D",
+      "surface_elevated": "#1A2235",
+      "terminal": "#000000"
+    },
+    "text": {
+      "primary": "#F8FAFC",
+      "secondary": "#94A3B8",
+      "muted": "#475569",
+      "terminal": "#00F0FF"
+    },
+    "accents": {
+      "critical": "#FF3B30",
+      "warning": "#FFD60A",
+      "success": "#39FF14",
+      "info": "#00F0FF",
+      "border": "rgba(255, 255, 255, 0.15)"
+    },
+    "banner": {
+      "bg": "#FF3B30",
+      "text": "#000000"
+    }
+  },
+  "visual_enhancers": {
+    "surfaces": [
+      "GRID BORDERS (The 'Technical' Look): Expose the skeleton. Use 1px borders on right and bottom of grid items to create a command-center mesh structure.",
+      "FLAT, CARDLESS UI: Avoid rounded floating cards with drop shadows. Rely on 'border-collapse' style layouts. Elements should butt up against each other with sharp 1px borders.",
+      "NO GLASSMORPHISM: Tactical interfaces demand raw data clarity, no blurry refractions.",
+      "CRT/Scanline overlay: Subtle repeating linear gradient background pattern for a rugged, classified aesthetic."
+    ],
+    "micro_animations": [
+      "Blinking cursor indicators for active data streams and terminal logs.",
+      "Hard cuts or fast transitions (0.1s ease) rather than slow smooth fades. Interactions should feel immediate and mechanical.",
+      "Typing effect for mission logs and console output."
+    ]
+  },
+  "layouts": {
+    "general": [
+      "Left-aligned, asymmetric, information-dense grid systems.",
+      "Bento Grid Mode B (High Density): Tight gaps (gap-0 or gap-4 with visible borders), 12-column foundation.",
+      "Containers must use 1px solid borders with sharp corners (rounded-none)."
+    ],
+    "spacing": [
+      "Use tight padding inside data cells (p-2 or p-4), but generous spacing (p-8) around the macro layout containers to separate modules."
+    ]
+  },
+  "components": {
+    "rules": [
+      "RESTRICTED BANNER: Fixed at absolute top and bottom (h-6). Bright red background ('bg-[#FF3B30]'), black text, bold, uppercase, mono: '// RESTRICTED - INDIAN MINISTRY OF DEFENCE //'.",
+      "TABS: Use sharp edges, 'border-b' only. Active tab gets a 2px colored bottom border (Info Blue or Critical Red).",
+      "BUTTONS: Brutalist, 1px border, square edges. Hover inverts colors or adds scanline overlay.",
+      "FORMS/INPUTS: Dark background ('bg-black/50'), sharp 1px border, bright text. Focus states must have a high-contrast ring ('focus:ring-[#00F0FF]')."
+    ],
+    "required_screens": [
+      "Login Screen: JWT auth, RESTRICTED banner, center-aligned brutalist login box over a dark grid.",
+      "Command Center Dashboard: Live RF spectrum waterfall (simulated), tactical map, swarm indicator, active target list.",
+      "Signal Detection & Analysis: 7-stage CEMA pipeline visualization, live IQ/pcap upload, drone protocol identification.",
+      "MAVLink Broadcast Console: Packet crafter (system_id, component_id, type), WebSocket stream view, hex/binary preview.",
+      "Payload Library: Cyber-physical attack scripts list with severity and target compatibility.",
+      "Kill Chain Tracker: Detect -> Track -> Identify -> Decide -> Defeat pipeline per target.",
+      "Mission Log: Chronological terminal-style log."
+    ]
+  },
+  "icons": {
+    "library": "lucide-react",
+    "rules": [
+      "Use sharp, functional icons. Minimal decoration. Ensure stroke width is thin (1.5) for a technical feel."
+    ]
+  },
+  "motion": {
+    "rules": [
+      "Use Framer Motion sparingly for data updates.",
+      "Fast, mechanical animations. Avoid bouncy springs.",
+      "Ensure 'prefers-reduced-motion' is respected for all blinking/flashing elements."
+    ]
+  },
+  "accessibility": {
+    "rules": [
+      "Ensure 4.5:1 contrast for all UI elements.",
+      "Critical alerts MUST NOT rely solely on color (use icons or flashing borders).",
+      "All interactive elements MUST have data-testid attributes (kebab-case, role-based, e.g., 'data-testid=\"deploy-payload-btn\"')."
+    ]
+  },
+  "media_and_3d": {
+    "libraries": [
+      "recharts: For RF spectrum waterfall and signal waveform charts (use AreaCharts with #00F0FF glow).",
+      "lucide-react: For all tactical iconography."
+    ],
+    "image_urls": []
+  },
+  "instructions_to_main_agent": [
+    "CRITICAL: Do NOT use a generic SaaS layout. Think mission-control terminal and electronic warfare command center.",
+    "Implement the RESTRICTED classification banner firmly pinned to the top and bottom of every screen. It must be fixed.",
+    "Ensure dark mode is locked. DO NOT build a light mode toggle.",
+    "All hex dumps, console logs, and MAVLink packet views must strictly use the 'font-mono' (JetBrains Mono) class with a terminal-like appearance.",
+    "Use grid lines extensively ('border-border', 'border-collapse') to separate data points, rather than padded floating cards."
+  ],
+  "UNIVERSAL GUIDELINES FOR MAIN AGENT": [
+    "Do not apply `transition: all` anywhere. Be specific (e.g., `transition-colors`, `transition-transform`).",
+    "Never center-align the main app container. Keep it full width and grid-based.",
+    "Use Lucide icons strictly for all iconography. No emojis.",
+    "Implement `sonner` for all system alerts/toasts with a dark, tactical, toast style.",
+    "Ensure `data-testid` is added to all buttons, links, and forms for E2E testing.",
+    "Never use pure `#000000` for large backgrounds unless it's a specific terminal block. Use the defined `background.base` tint."
+  ]
+}

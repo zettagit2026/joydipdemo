@@ -1,0 +1,11 @@
+# Docker build ignores (keep image lean)
+node_modules
+build
+.next
+.cache
+.env.local
+.git
+.gitignore
+Dockerfile
+docker-compose.yml
+README*.md

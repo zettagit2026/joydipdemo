@@ -1,0 +1,57 @@
+# CEMA cUAS — One-command launcher (Windows + Linux + macOS)
+# Boots MongoDB, FastAPI backend, and React frontend behind Nginx.
+# Usage:
+#   docker compose up --build   -> first run
+#   docker compose up           -> subsequent runs
+#   docker compose down         -> stop
+#   docker compose down -v      -> stop AND wipe database
+
+services:
+  mongo:
+    image: mongo:7
+    container_name: cema-mongo
+    restart: unless-stopped
+    volumes:
+      - cema_mongo_data:/data/db
+    ports:
+      - "27017:27017"
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+    container_name: cema-backend
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      MONGO_URL: "mongodb://mongo:27017"
+      DB_NAME: "cema_cuas_db"
+      CORS_ORIGINS: "*"
+      JWT_SECRET: "${JWT_SECRET:-change-me-1b5e594016718b935efbb2a63e3786eb46973054f45b4bc84d7b03ea5e0f35f8}"
+      ADMIN_EMAIL: "${ADMIN_EMAIL:-operator@cema.mil}"
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD:-cema@2026}"
+    ports:
+      - "8001:8001"
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Frontend must know where the backend lives. In local Docker,
+        # the browser hits the host's port 8001 (not the docker network).
+        REACT_APP_BACKEND_URL: "http://localhost:8001"
+    container_name: cema-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "3000:3000"
+
+volumes:
+  cema_mongo_data:

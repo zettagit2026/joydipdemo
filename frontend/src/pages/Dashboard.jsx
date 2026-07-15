@@ -12,12 +12,14 @@ const THREAT_COLOR = {
 
 function Waterfall() {
   const [rows, setRows] = useState([]);
+  const [source, setSource] = useState("SIM");
   useEffect(() => {
     let id;
     const load = async () => {
       try {
         const { data } = await api.get("/spectrum/waterfall?bins=96&rows=24");
         setRows(data.rows);
+        setSource(data.source || "SIM");
       } catch { /* silent */ }
     };
     load();
@@ -32,6 +34,8 @@ function Waterfall() {
     return `hsl(${hue}, 90%, ${20 + norm * 45}%)`;
   };
 
+  const isReal = source === "HACKRF";
+
   return (
     <div data-testid="rf-waterfall" className="tactical-border" style={{ background: "var(--bg-terminal)" }}>
       <div className="flex items-center justify-between px-3 py-2 tactical-border-b">
@@ -39,6 +43,17 @@ function Waterfall() {
           <Signal size={12} strokeWidth={1.5} style={{ color: "var(--accent-info)" }} />
           <span className="font-mono text-[10px] uppercase tracking-widest text-slate-400">
             RF Spectrum Waterfall · 2.400–2.500 GHz · 25 MSPS
+          </span>
+          <span
+            data-testid="waterfall-source"
+            className="px-2 py-0.5 font-mono text-[10px] font-bold uppercase tracking-widest tactical-border"
+            style={{
+              color: isReal ? "var(--accent-success)" : "var(--accent-warning)",
+              borderColor: isReal ? "var(--accent-success)" : "var(--accent-warning)",
+              background: isReal ? "rgba(57,255,20,0.08)" : "rgba(255,214,10,0.06)",
+            }}
+          >
+            {isReal ? "● HACKRF LIVE" : "◌ SIM MODE"}
           </span>
         </div>
         <span className="font-mono text-[10px] text-slate-600 blink">● LIVE</span>
@@ -103,6 +118,12 @@ export default function Dashboard() {
   const swarmCount = new Set(active.filter((d) => d.swarm_id).map((d) => d.swarm_id)).size;
   const critical = active.filter((d) => d.threat_level === "CRITICAL").length;
   const neutralized = detections.filter((d) => d.status === "NEUTRALIZED").length;
+  // Any detection whose source is NOT the simulator counts as a live hardware feed.
+  const liveSources = new Set(
+    detections
+      .map((d) => d.source)
+      .filter((s) => s && s !== "SIM" && s !== "UPLOAD")
+  );
 
   const simulate = async () => {
     try {
@@ -118,8 +139,21 @@ export default function Dashboard() {
     <div className="space-y-6">
       <div className="flex items-end justify-between">
         <div>
-          <div className="font-mono text-[10px] uppercase tracking-widest text-slate-500 mb-1">
-            <Radar size={12} className="inline mr-2" strokeWidth={1.5} /> Command Center
+          <div className="font-mono text-[10px] uppercase tracking-widest text-slate-500 mb-1 flex items-center gap-3">
+            <Radar size={12} className="inline" strokeWidth={1.5} /> Command Center
+            {liveSources.size > 0 && (
+              <span
+                data-testid="live-hw-indicator"
+                className="px-2 py-0.5 tactical-border font-mono text-[10px] font-bold"
+                style={{
+                  color: "var(--accent-success)",
+                  borderColor: "var(--accent-success)",
+                  background: "rgba(57,255,20,0.08)",
+                }}
+              >
+                ● {Array.from(liveSources).join(" + ")} LIVE
+              </span>
+            )}
           </div>
           <h1 className="font-heading font-black text-5xl uppercase tracking-tighter">
             Tactical Overview
@@ -128,9 +162,10 @@ export default function Dashboard() {
         <button
           data-testid="simulate-detection-btn"
           onClick={simulate}
+          title="Inject a fake contact for testing. Real detections come from HackRF / SiK radio."
           className="flex items-center gap-2 px-4 py-2 tactical-border font-mono text-xs uppercase tracking-widest hover:bg-white hover:text-black transition-colors scanline-btn"
         >
-          <Plus size={14} strokeWidth={1.5} /> SIM CONTACT
+          <Plus size={14} strokeWidth={1.5} /> INJECT SIM
         </button>
       </div>
 
@@ -166,6 +201,7 @@ export default function Dashboard() {
               <table className="w-full text-xs" data-testid="detections-table">
                 <thead>
                   <tr className="tactical-border-b font-mono text-[10px] uppercase tracking-widest text-slate-500">
+                    <th className="text-left p-2">SRC</th>
                     <th className="text-left p-2">CALLSIGN</th>
                     <th className="text-left p-2">MODEL</th>
                     <th className="text-left p-2">PROTOCOL</th>
@@ -179,33 +215,47 @@ export default function Dashboard() {
                 </thead>
                 <tbody className="font-mono">
                   {loading && (
-                    <tr><td colSpan={9} className="p-4 text-center text-slate-500">acquiring<span className="term-caret" /></td></tr>
+                    <tr><td colSpan={10} className="p-4 text-center text-slate-500">acquiring<span className="term-caret" /></td></tr>
                   )}
                   {!loading && detections.length === 0 && (
-                    <tr><td colSpan={9} className="p-4 text-center text-slate-500">No contacts. Trigger SIM CONTACT.</td></tr>
+                    <tr><td colSpan={10} className="p-4 text-center text-slate-500">No contacts. Trigger INJECT SIM or start the RF bridge.</td></tr>
                   )}
-                  {detections.map((d) => (
-                    <tr key={d.id} data-testid={`row-${d.id}`}
-                        className="tactical-border-b hover:bg-[#0F1626] transition-colors">
-                      <td className="p-2 text-white">{d.callsign}</td>
-                      <td className="p-2 text-slate-300">{d.model}</td>
-                      <td className="p-2 text-slate-400">{d.protocol}</td>
-                      <td className="p-2">
-                        <span className="px-2 py-0.5 tactical-border font-bold text-[10px]"
-                              style={{ color: THREAT_COLOR[d.threat_level], borderColor: THREAT_COLOR[d.threat_level] }}>
-                          {d.threat_level}
-                        </span>
-                      </td>
-                      <td className="p-2 text-right text-slate-300">{d.center_freq_ghz}</td>
-                      <td className="p-2 text-right text-slate-300">{d.rssi_dbm}</td>
-                      <td className="p-2 text-right text-slate-300">{d.distance_m}</td>
-                      <td className="p-2 text-[10px]" style={{ color: "var(--accent-info)" }}>{d.cema_stage}</td>
-                      <td className="p-2 text-[10px]"
-                          style={{ color: d.status === "NEUTRALIZED" ? "var(--accent-critical)" : "var(--accent-success)" }}>
-                        {d.status === "NEUTRALIZED" ? "DEFEAT" : d.kill_chain_stage}
-                      </td>
-                    </tr>
-                  ))}
+                  {detections.map((d) => {
+                    const src = d.source || "SIM";
+                    const isLive = src === "HACKRF" || src === "SIK_RADIO";
+                    const srcColor = isLive ? "var(--accent-success)"
+                                     : src === "UPLOAD" ? "var(--accent-warning)"
+                                     : "var(--text-muted)";
+                    return (
+                      <tr key={d.id} data-testid={`row-${d.id}`}
+                          className="tactical-border-b hover:bg-[#0F1626] transition-colors">
+                        <td className="p-2">
+                          <span data-testid={`src-${d.id}`}
+                                className="px-1.5 py-0.5 tactical-border font-bold text-[9px]"
+                                style={{ color: srcColor, borderColor: srcColor }}>
+                            {src}
+                          </span>
+                        </td>
+                        <td className="p-2 text-white">{d.callsign}</td>
+                        <td className="p-2 text-slate-300">{d.model}</td>
+                        <td className="p-2 text-slate-400">{d.protocol}</td>
+                        <td className="p-2">
+                          <span className="px-2 py-0.5 tactical-border font-bold text-[10px]"
+                                style={{ color: THREAT_COLOR[d.threat_level], borderColor: THREAT_COLOR[d.threat_level] }}>
+                            {d.threat_level}
+                          </span>
+                        </td>
+                        <td className="p-2 text-right text-slate-300">{d.center_freq_ghz}</td>
+                        <td className="p-2 text-right text-slate-300">{d.rssi_dbm}</td>
+                        <td className="p-2 text-right text-slate-300">{d.distance_m}</td>
+                        <td className="p-2 text-[10px]" style={{ color: "var(--accent-info)" }}>{d.cema_stage}</td>
+                        <td className="p-2 text-[10px]"
+                            style={{ color: d.status === "NEUTRALIZED" ? "var(--accent-critical)" : "var(--accent-success)" }}>
+                          {d.status === "NEUTRALIZED" ? "DEFEAT" : d.kill_chain_stage}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

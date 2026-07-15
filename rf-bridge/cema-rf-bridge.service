@@ -1,0 +1,18 @@
+[Unit]
+Description=CEMA cUAS RF Bridge (HackRF scanner + MAVLink serial bridge)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Change these to match your deployment:
+User=root
+WorkingDirectory=/opt/cema/rf-bridge
+ExecStart=/opt/cema/rf-bridge/run.sh both
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,9 @@
+# CEMA cUAS RF Bridge — Python worker deps
+# Install with: pip install -r requirements.txt
+
+pyserial==3.5
+pymavlink==2.4.41
+requests==2.32.3
+websocket-client==1.8.0
+numpy>=1.26.0
+python-dotenv==1.0.1

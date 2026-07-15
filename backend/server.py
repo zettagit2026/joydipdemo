@@ -367,7 +367,93 @@ async def delete_detection(det_id: str, user: Dict = Depends(get_current_user)):
 @api.get("/spectrum/waterfall")
 async def spectrum_waterfall(bins: int = 96, rows: int = 24,
                              user: Dict = Depends(get_current_user)):
-    return {"bins": bins, "rows": [generate_waterfall(bins) for _ in range(rows)]}
+    # Serve real waterfall from the RF bridge if it has published data
+    # within the last 10 seconds; otherwise fall back to the simulator.
+    ing = _last_spectrum_ingest
+    if ing and (datetime.now(timezone.utc) - ing["ts"]).total_seconds() < 10:
+        return {"bins": ing["bins"], "rows": ing["rows"], "source": "HACKRF"}
+    return {"bins": bins,
+            "rows": [generate_waterfall(bins) for _ in range(rows)],
+            "source": "SIM"}
+
+
+# =====================================================================
+# Routes: RF bridge ingest (HackRF + SiK radio → app)
+# =====================================================================
+_last_spectrum_ingest: Optional[Dict] = None
+
+
+class SpectrumIngestBody(BaseModel):
+    bins: int
+    rows: List[List[float]]
+    center_freq_ghz: Optional[float] = None
+    span_mhz: Optional[float] = None
+
+
+class DetectionIngestBody(BaseModel):
+    callsign: Optional[str] = None
+    model: str = "Unknown UAV"
+    protocol: str = "Unknown"
+    threat_level: str = "MEDIUM"
+    center_freq_ghz: float
+    bandwidth_mhz: float = 20.0
+    rssi_dbm: float = -80.0
+    snr_db: float = 10.0
+    bearing_deg: float = 0.0
+    distance_m: float = 0.0
+    altitude_m: float = 0.0
+    speed_ms: float = 0.0
+    system_id: int = 1
+    component_id: int = 1
+    encrypted: bool = False
+    source: str = "HACKRF"
+
+
+@api.post("/spectrum/ingest")
+async def spectrum_ingest(body: SpectrumIngestBody,
+                          user: Dict = Depends(get_current_user)):
+    global _last_spectrum_ingest
+    _last_spectrum_ingest = {
+        "ts": datetime.now(timezone.utc),
+        "bins": body.bins,
+        "rows": body.rows,
+        "center_freq_ghz": body.center_freq_ghz,
+        "span_mhz": body.span_mhz,
+    }
+    return {"ok": True, "accepted_rows": len(body.rows)}
+
+
+@api.post("/detections/ingest")
+async def detection_ingest(body: DetectionIngestBody,
+                           user: Dict = Depends(get_current_user)):
+    det = new_detection()  # gives a sane skeleton with id/uuid + timestamps
+    det.update({
+        "callsign": body.callsign or det["callsign"],
+        "model": body.model,
+        "protocol": body.protocol,
+        "threat_level": body.threat_level,
+        "center_freq_ghz": body.center_freq_ghz,
+        "bandwidth_mhz": body.bandwidth_mhz,
+        "rssi_dbm": body.rssi_dbm,
+        "snr_db": body.snr_db,
+        "bearing_deg": body.bearing_deg,
+        "distance_m": body.distance_m,
+        "altitude_m": body.altitude_m,
+        "speed_ms": body.speed_ms,
+        "system_id": body.system_id,
+        "component_id": body.component_id,
+        "encrypted": body.encrypted,
+        "source": body.source,
+    })
+    await db.detections.insert_one(det.copy())
+    await log_event("DETECTION",
+                    f"[{body.source}] LIVE contact {det['callsign']} @ {body.center_freq_ghz} GHz "
+                    f"(RSSI {body.rssi_dbm} dBm)",
+                    meta={"detection_id": det["id"], "source": body.source},
+                    actor=user["email"])
+    det.pop("_id", None)
+    return det
+
 
 
 # =====================================================================

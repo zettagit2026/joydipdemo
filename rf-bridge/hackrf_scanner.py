@@ -106,23 +106,30 @@ def run_sweep_once(cfg_: SweepConfig) -> List[Tuple[float, float]]:
     ]
     log.debug("running: %s", " ".join(cmd))
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
     except subprocess.TimeoutExpired:
-        log.warning("hackrf_sweep timeout")
+        log.warning("hackrf_sweep timed out after 120s — HackRF may be stuck. Try replug.")
         return []
     if proc.returncode != 0:
-        log.warning("hackrf_sweep rc=%d stderr=%s", proc.returncode, proc.stderr[:200])
+        log.warning("hackrf_sweep rc=%d stderr=%s",
+                    proc.returncode, (proc.stderr or "")[:400])
 
-    # CSV: date, time, hz_low, hz_high, hz_bin_width, num_samples, db_bin0, db_bin1, ...
+    if not proc.stdout:
+        log.warning("hackrf_sweep produced no output. stderr=%s", (proc.stderr or "")[:400])
+        return []
+
+    # CSV: date, time, hz_low, hz_high, hz_bin_width, num_samples, db0, db1, ...
+    # Separator varies between hackrf-tools versions ("," vs ", "), so split
+    # on any comma with optional whitespace.
     points: List[Tuple[float, float]] = []
     for line in proc.stdout.splitlines():
-        parts = line.strip().split(", ")
+        parts = [p.strip() for p in line.split(",")]
         if len(parts) < 7:
             continue
         try:
             hz_low = float(parts[2])
             hz_bin = float(parts[4])
-            dbs = [float(x) for x in parts[6:]]
+            dbs = [float(x) for x in parts[6:] if x]
         except ValueError:
             continue
         for i, db in enumerate(dbs):
@@ -225,19 +232,28 @@ def main() -> int:
     signal.signal(signal.SIGINT, _sig)
     signal.signal(signal.SIGTERM, _sig)
 
+    log.info("Backend URL: %s", client.base)
     log.info("Sweep %d–%d MHz, bin %d Hz, LNA %d dB, VGA %d dB, thresh +%.0f dB",
              cfg_.low_mhz, cfg_.high_mhz, cfg_.bin_hz, cfg_.lna, cfg_.vga, cfg_.threshold_db)
 
+    sweep_count = 0
     while not stop:
+        sweep_count += 1
         t0 = time.time()
         points = run_sweep_once(cfg_)
         if not points:
-            log.warning("empty sweep — retry in %.1fs", cfg_.interval)
+            log.warning("[sweep #%d] empty result — check permissions (`sudo hackrf_info`), "
+                        "USB replug, or install hackrf-tools", sweep_count)
             time.sleep(cfg_.interval)
             continue
-        log.info("sweep done: %d bins, elapsed %.1fs", len(points), time.time() - t0)
 
-        # 1) Publish waterfall slice
+        dbs = np.array([p[1] for p in points])
+        noise = float(np.median(dbs))
+        peak_db = float(np.max(dbs))
+        log.info("[sweep #%d] %d bins in %.1fs · noise=%.1f dBm · peak=%.1f dBm",
+                 sweep_count, len(points), time.time() - t0, noise, peak_db)
+
+        # 1) Publish waterfall slice — this alone flips the UI badge to HACKRF LIVE
         row = build_waterfall_row(points, cfg_.waterfall_center_mhz, cfg_.waterfall_span_mhz)
         if row:
             try:
@@ -247,11 +263,18 @@ def main() -> int:
                     "center_freq_ghz": round(cfg_.waterfall_center_mhz / 1000, 4),
                     "span_mhz": cfg_.waterfall_span_mhz,
                 })
+                log.info("  → spectrum row pushed (bins=%d, band %.0f±%.0f MHz)",
+                         len(row), cfg_.waterfall_center_mhz, cfg_.waterfall_span_mhz / 2)
             except Exception as e:
                 log.warning("spectrum ingest failed: %s", e)
+        else:
+            log.warning("  → waterfall band %.0f±%.0f MHz outside sweep range — "
+                        "adjust WATERFALL_CENTER_MHZ in .env",
+                        cfg_.waterfall_center_mhz, cfg_.waterfall_span_mhz / 2)
 
         # 2) Publish detections
         peaks = detect_peaks(points, cfg_.threshold_db)
+        log.info("  → %d peaks over noise+%.0fdB", len(peaks), cfg_.threshold_db)
         now = time.time()
         for freq_hz, db in peaks:
             key = int(round(freq_hz / 1e6))

@@ -1,0 +1,313 @@
+"""End-to-end backend tests for CEMA cUAS operator console.
+
+Covers: auth, detections (CRUD + simulate + upload), CEMA/killchain advance,
+spectrum, MAVLink craft/broadcast/list, payloads (deploy target + broadcast),
+mission logs, and the WebSocket packet stream.
+"""
+from __future__ import annotations
+
+import asyncio
+import io
+import json
+import os
+import time
+import uuid
+from urllib.parse import urlparse
+
+import pytest
+import requests
+import websockets
+
+BASE_URL = os.environ["REACT_APP_BACKEND_URL"].rstrip("/") if "REACT_APP_BACKEND_URL" in os.environ else None
+if BASE_URL is None:
+    # Fallback: read from frontend .env
+    from pathlib import Path
+    env_txt = Path("/app/frontend/.env").read_text()
+    for line in env_txt.splitlines():
+        if line.startswith("REACT_APP_BACKEND_URL="):
+            BASE_URL = line.split("=", 1)[1].strip().strip('"').rstrip("/")
+            break
+assert BASE_URL, "REACT_APP_BACKEND_URL not resolvable"
+
+API = f"{BASE_URL}/api"
+
+ADMIN_EMAIL = "operator@cema.mil"
+ADMIN_PASSWORD = "cema@2026"
+
+
+# ------------------------- Fixtures -------------------------
+@pytest.fixture(scope="session")
+def session() -> requests.Session:
+    s = requests.Session()
+    s.headers.update({"Content-Type": "application/json"})
+    return s
+
+
+@pytest.fixture(scope="session")
+def token(session: requests.Session) -> str:
+    r = session.post(f"{API}/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD})
+    assert r.status_code == 200, f"login failed: {r.status_code} {r.text}"
+    data = r.json()
+    assert "token" in data
+    return data["token"]
+
+
+@pytest.fixture(scope="session")
+def auth_headers(token: str) -> dict:
+    return {"Authorization": f"Bearer {token}"}
+
+
+# ------------------------- Auth -------------------------
+class TestAuth:
+    def test_login_success(self, session):
+        r = session.post(f"{API}/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD})
+        assert r.status_code == 200
+        data = r.json()
+        assert isinstance(data.get("token"), str) and len(data["token"]) > 20
+        u = data.get("user", {})
+        assert u.get("email") == ADMIN_EMAIL
+        assert u.get("role") == "admin"
+        assert u.get("clearance") == "RESTRICTED"
+
+    def test_login_wrong_password(self, session):
+        r = session.post(f"{API}/auth/login", json={"email": ADMIN_EMAIL, "password": "wrong"})
+        assert r.status_code == 401
+
+    def test_me_with_token(self, auth_headers):
+        r = requests.get(f"{API}/auth/me", headers=auth_headers)
+        assert r.status_code == 200
+        u = r.json()
+        assert u.get("email") == ADMIN_EMAIL
+        assert "password_hash" not in u
+
+    def test_me_without_token(self):
+        r = requests.get(f"{API}/auth/me")
+        assert r.status_code == 401
+
+
+# ------------------------- Detections -------------------------
+class TestDetections:
+    def test_list_seeded(self, auth_headers):
+        r = requests.get(f"{API}/detections", headers=auth_headers)
+        assert r.status_code == 200
+        data = r.json()
+        assert isinstance(data, list)
+        assert len(data) >= 6, f"expected >=6 seeded detections, got {len(data)}"
+        d0 = data[0]
+        for k in ["id", "callsign", "model", "protocol", "threat_level",
+                  "center_freq_ghz", "rssi_dbm", "cema_stage", "kill_chain_stage", "status"]:
+            assert k in d0, f"detection missing field {k}"
+
+    def test_simulate_increases_count(self, auth_headers):
+        r1 = requests.get(f"{API}/detections", headers=auth_headers)
+        c0 = len(r1.json())
+        r2 = requests.post(f"{API}/detections/simulate", headers=auth_headers)
+        assert r2.status_code == 200
+        det = r2.json()
+        assert "id" in det and "callsign" in det
+        r3 = requests.get(f"{API}/detections", headers=auth_headers)
+        assert len(r3.json()) == c0 + 1
+
+    def test_upload_returns_detection_with_meta(self, auth_headers):
+        # multipart upload
+        files = {"file": ("capture.iq", io.BytesIO(b"\x00" * 2048), "application/octet-stream")}
+        headers = {k: v for k, v in auth_headers.items() if k != "Content-Type"}
+        r = requests.post(f"{API}/detections/upload", headers=headers, files=files)
+        assert r.status_code == 200, r.text
+        det = r.json()
+        assert det.get("source") == "UPLOAD"
+        assert isinstance(det.get("upload_meta"), dict)
+        assert det["upload_filename"] == "capture.iq"
+        assert det["upload_size_bytes"] == 2048
+
+    def test_cema_advance(self, auth_headers):
+        # Create a fresh detection first
+        det = requests.post(f"{API}/detections/simulate", headers=auth_headers).json()
+        idx0 = det["cema_stage_index"]
+        r = requests.post(f"{API}/detections/{det['id']}/cema-advance", headers=auth_headers)
+        assert r.status_code == 200
+        d2 = r.json()
+        assert d2["cema_stage_index"] == idx0 + 1
+        # unknown id 404
+        r404 = requests.post(f"{API}/detections/{uuid.uuid4()}/cema-advance", headers=auth_headers)
+        assert r404.status_code == 404
+
+    def test_killchain_advance(self, auth_headers):
+        det = requests.post(f"{API}/detections/simulate", headers=auth_headers).json()
+        idx0 = det["kill_chain_index"]
+        r = requests.post(f"{API}/detections/{det['id']}/killchain-advance", headers=auth_headers)
+        assert r.status_code == 200
+        d2 = r.json()
+        assert d2["kill_chain_index"] == idx0 + 1
+
+
+# ------------------------- Spectrum -------------------------
+class TestSpectrum:
+    def test_waterfall_shape(self, auth_headers):
+        r = requests.get(f"{API}/spectrum/waterfall?bins=64&rows=8", headers=auth_headers)
+        assert r.status_code == 200
+        data = r.json()
+        assert data["bins"] == 64
+        assert isinstance(data["rows"], list)
+        assert len(data["rows"]) == 8
+        for row in data["rows"]:
+            assert isinstance(row, list) and len(row) == 64
+            assert all(isinstance(v, (int, float)) for v in row)
+
+
+# ------------------------- MAVLink -------------------------
+class TestMavlink:
+    def test_craft_v2_command_long(self, auth_headers):
+        body = {"version": "v2", "message_id": 76, "command": 21, "target_system": 1}
+        r = requests.post(f"{API}/mavlink/craft", headers=auth_headers, json=body)
+        assert r.status_code == 200
+        data = r.json()
+        hex_ = data["hex"]
+        assert hex_.upper().startswith("FD"), f"v2 STX expected, got {hex_[:2]}"
+        assert data["length"] >= 12
+        assert data["decoded"]["version"] == "v2"
+        assert data["decoded"]["message_id"] == 76
+
+    def test_craft_v1(self, auth_headers):
+        body = {"version": "v1", "message_id": 76, "command": 21, "target_system": 1}
+        r = requests.post(f"{API}/mavlink/craft", headers=auth_headers, json=body)
+        assert r.status_code == 200
+        data = r.json()
+        assert data["hex"].upper().startswith("FE")
+        assert data["decoded"]["version"] == "v1"
+
+    def test_broadcast_persists_and_listed(self, auth_headers):
+        body = {"version": "v2", "message_id": 76, "command": 21, "target_system": 1}
+        r = requests.post(f"{API}/mavlink/broadcast", headers=auth_headers, json=body)
+        assert r.status_code == 200
+        pkt = r.json()
+        assert "id" in pkt and "hex" in pkt
+        r2 = requests.get(f"{API}/mavlink/packets?limit=50", headers=auth_headers)
+        assert r2.status_code == 200
+        ids = [p["id"] for p in r2.json()]
+        assert pkt["id"] in ids
+
+
+# ------------------------- Payloads -------------------------
+class TestPayloads:
+    def test_list_payloads(self, auth_headers):
+        r = requests.get(f"{API}/payloads", headers=auth_headers)
+        assert r.status_code == 200
+        data = r.json()
+        assert len(data) == 10
+        ids = {p["id"] for p in data}
+        for k in [f"PL-{i:03d}" for i in range(1, 11)]:
+            assert k in ids, f"missing payload {k}"
+        for p in data:
+            for f in ["id", "name", "category", "severity", "mav_cmd"]:
+                assert f in p
+
+    def test_deploy_target_pl005(self, auth_headers):
+        # create a fresh active detection to target
+        det = requests.post(f"{API}/detections/simulate", headers=auth_headers).json()
+        r = requests.post(f"{API}/payloads/deploy",
+                          headers=auth_headers,
+                          json={"payload_id": "PL-005", "target_detection_id": det["id"]})
+        assert r.status_code == 200, r.text
+        pkt = r.json()
+        assert pkt["payload_id"] == "PL-005"
+        # Verify detection became NEUTRALIZED/DEFEAT
+        r2 = requests.get(f"{API}/detections/{det['id']}", headers=auth_headers)
+        assert r2.status_code == 200
+        d2 = r2.json()
+        assert d2["status"] == "NEUTRALIZED"
+        assert d2["kill_chain_stage"] == "DEFEAT"
+
+    def test_deploy_unknown_payload_id(self, auth_headers):
+        r = requests.post(f"{API}/payloads/deploy",
+                          headers=auth_headers,
+                          json={"payload_id": "PL-999", "target_detection_id": None, "broadcast": True})
+        assert r.status_code == 404
+
+    def test_deploy_missing_target_no_broadcast(self, auth_headers):
+        r = requests.post(f"{API}/payloads/deploy",
+                          headers=auth_headers,
+                          json={"payload_id": "PL-001", "broadcast": False})
+        assert r.status_code == 400
+
+    def test_deploy_broadcast_pl010_neutralizes_all_active(self, auth_headers):
+        # Ensure at least a couple active targets
+        for _ in range(3):
+            requests.post(f"{API}/detections/simulate", headers=auth_headers)
+        active_before = [d for d in requests.get(f"{API}/detections", headers=auth_headers).json()
+                         if d["status"] == "ACTIVE"]
+        assert len(active_before) >= 1
+        before_ids = {d["id"] for d in active_before}
+        r = requests.post(f"{API}/payloads/deploy",
+                          headers=auth_headers,
+                          json={"payload_id": "PL-010", "broadcast": True})
+        assert r.status_code == 200
+        # Verify every previously-active id is now NEUTRALIZED (other workers may have created
+        # new ACTIVE detections after our broadcast — that's fine).
+        after = {d["id"]: d for d in requests.get(f"{API}/detections", headers=auth_headers).json()}
+        for did in before_ids:
+            assert did in after, f"detection {did} disappeared"
+            assert after[did]["status"] == "NEUTRALIZED", (
+                f"expected {did} NEUTRALIZED, got {after[did]['status']}"
+            )
+
+
+# ------------------------- Mission log -------------------------
+class TestLogs:
+    def test_logs_have_prior_actions(self, auth_headers):
+        r = requests.get(f"{API}/logs?limit=200", headers=auth_headers)
+        assert r.status_code == 200
+        entries = r.json()
+        assert isinstance(entries, list) and len(entries) > 0
+        kinds = {e["kind"] for e in entries}
+        # AUTH from login is guaranteed; others depend on prior tests. Check presence loosely.
+        assert "AUTH" in kinds
+        # At least one of the following should be present as we exercised them
+        assert kinds & {"DETECTION", "MAVLINK", "PAYLOAD", "CEMA", "KILLCHAIN"}
+
+
+# ------------------------- WebSocket -------------------------
+class TestWebSocket:
+    def _ws_url(self, token: str | None = None) -> str:
+        u = urlparse(BASE_URL)
+        scheme = "wss" if u.scheme == "https" else "ws"
+        base = f"{scheme}://{u.netloc}/api/ws/mavlink"
+        return f"{base}?token={token}" if token else base
+
+    @pytest.mark.asyncio
+    async def test_ws_no_token_rejected(self):
+        url = self._ws_url(None)
+        try:
+            async with websockets.connect(url) as ws:
+                # If we somehow got in, wait for a close.
+                await asyncio.wait_for(ws.recv(), timeout=3)
+                pytest.fail("expected ws to be rejected without token")
+        except Exception:
+            # connection closed / rejected is expected
+            assert True
+
+    @pytest.mark.asyncio
+    async def test_ws_receives_broadcast_packet(self, token, auth_headers):
+        url = self._ws_url(token)
+        async with websockets.connect(url) as ws:
+            # Consume hello frame
+            hello = await asyncio.wait_for(ws.recv(), timeout=5)
+            assert "hello" in hello
+
+            # Trigger a broadcast via HTTP
+            body = {"version": "v2", "message_id": 76, "command": 21, "target_system": 1}
+            r = requests.post(f"{API}/mavlink/broadcast", headers=auth_headers, json=body)
+            assert r.status_code == 200
+
+            # Expect a "packet" message
+            got_packet = False
+            for _ in range(5):
+                msg = await asyncio.wait_for(ws.recv(), timeout=5)
+                try:
+                    obj = json.loads(msg)
+                except Exception:
+                    continue
+                if obj.get("type") == "packet":
+                    got_packet = True
+                    break
+            assert got_packet, "did not receive packet frame on ws"

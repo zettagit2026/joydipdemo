@@ -1,0 +1,109 @@
+import { useEffect, useState } from "react";
+import { api, formatApiError } from "@/lib/api";
+import { toast } from "sonner";
+import { Crosshair, ChevronRight } from "lucide-react";
+
+const CHAIN = ["DETECT", "TRACK", "IDENTIFY", "DECIDE", "DEFEAT"];
+
+export default function KillChain() {
+  const [dets, setDets] = useState([]);
+
+  const load = async () => {
+    try { const { data } = await api.get("/detections"); setDets(data); }
+    catch (e) { toast.error("Load failed", { description: formatApiError(e) }); }
+  };
+  useEffect(() => { load(); const id = setInterval(load, 5000); return () => clearInterval(id); }, []);
+
+  const advance = async (id) => {
+    try { await api.post(`/detections/${id}/killchain-advance`); load(); }
+    catch (e) { toast.error("Advance failed", { description: formatApiError(e) }); }
+  };
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <div className="font-mono text-[10px] uppercase tracking-widest text-slate-500 mb-1">
+          <Crosshair size={12} className="inline mr-2" strokeWidth={1.5} /> Kill Chain
+        </div>
+        <h1 className="font-heading font-black text-5xl uppercase tracking-tighter">
+          Detect → Track → Identify → Decide → Defeat
+        </h1>
+      </div>
+
+      <div className="space-y-0 tactical-border">
+        {dets.length === 0 && (
+          <div className="p-8 font-mono text-xs text-slate-600 text-center">
+            no contacts under tracking<span className="term-caret" />
+          </div>
+        )}
+        {dets.map((d) => {
+          const idx = d.kill_chain_index;
+          const defeated = d.status === "NEUTRALIZED";
+          return (
+            <div key={d.id} data-testid={`kc-${d.id}`}
+                 className="p-5 tactical-border-b last:border-b-0"
+                 style={{ background: "var(--bg-surface)" }}>
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <div className="font-heading font-black text-xl tracking-tighter">
+                    {d.callsign} · <span className="text-slate-500">{d.model}</span>
+                  </div>
+                  <div className="font-mono text-[10px] uppercase tracking-widest text-slate-500 mt-0.5">
+                    sys={d.system_id} · protocol={d.protocol} · threat={d.threat_level}
+                    {d.swarm_id && <> · <span style={{color:"var(--accent-warning)"}}>{d.swarm_id}</span></>}
+                    {d.last_payload && <> · last-payload={d.last_payload}</>}
+                  </div>
+                </div>
+                {!defeated && (
+                  <button
+                    data-testid={`kc-advance-${d.id}`}
+                    onClick={() => advance(d.id)}
+                    className="flex items-center gap-2 px-3 py-1.5 tactical-border font-mono text-[10px] uppercase tracking-widest hover:bg-[#00F0FF] hover:text-black transition-colors scanline-btn"
+                    style={{ color: "var(--accent-info)", borderColor: "var(--accent-info)" }}
+                  >
+                    ADVANCE <ChevronRight size={12} strokeWidth={1.5} />
+                  </button>
+                )}
+                {defeated && (
+                  <span className="px-3 py-1.5 tactical-border font-mono text-[10px] uppercase tracking-widest pulse-crit"
+                        style={{ color: "var(--accent-critical)", borderColor: "var(--accent-critical)" }}>
+                    ● NEUTRALIZED
+                  </span>
+                )}
+              </div>
+
+              <div className="grid grid-cols-5 gap-0 tactical-border">
+                {CHAIN.map((step, i) => {
+                  const done = defeated ? true : i < idx;
+                  const active = !defeated && i === idx;
+                  const isDefeat = i === 4 && defeated;
+                  return (
+                    <div
+                      key={step}
+                      className={`p-4 kc-node text-center tactical-border-r last:border-r-0 ${
+                        isDefeat ? "defeat" : done ? "done" : active ? "active" : ""
+                      }`}
+                      style={{
+                        color: isDefeat ? "var(--accent-critical)"
+                             : done ? "var(--accent-success)"
+                             : active ? "var(--accent-info)" : "var(--text-muted)",
+                      }}
+                    >
+                      <div className="font-mono text-[10px] uppercase tracking-widest text-slate-500 mb-1">
+                        STAGE {i + 1}
+                      </div>
+                      <div className="font-heading font-black text-lg tracking-tighter uppercase">{step}</div>
+                      {active && (
+                        <div className="font-mono text-[10px] mt-1 blink">● IN PROGRESS</div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}

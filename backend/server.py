@@ -531,6 +531,7 @@ async def list_packets(limit: int = 100, user: Dict = Depends(get_current_user))
 
 
 @app.websocket("/api/ws/mavlink")
+@api.websocket("/ws/mavlink")           # duplicate registration for robustness
 async def ws_mavlink(ws: WebSocket):
     # Simple token check via query param
     token = ws.query_params.get("token")

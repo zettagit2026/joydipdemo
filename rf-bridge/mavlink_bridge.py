@@ -71,6 +71,10 @@ class MavlinkBridge:
         host = base.split("://", 1)[1]
         url = f"{ws_scheme}://{host}/api/ws/mavlink?token={quote(self.client.ensure_token())}"
 
+        # Log the URL WITHOUT the token so the user can see exactly what we hit.
+        log.info("Subscribing to MAVLink WS at %s?token=<jwt>",
+                 url.split("?", 1)[0])
+
         def on_open(ws):
             log.info("WS connected to app for MAVLink TX subscription.")
 

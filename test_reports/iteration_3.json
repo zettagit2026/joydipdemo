@@ -1,0 +1,40 @@
+{
+  "summary": "Verified iteration 3 changes: (a) ws_mavlink is now double-decorated with @app.websocket('/api/ws/mavlink') AND @api.websocket('/ws/mavlink') pointing to the same handler; (b) rf-bridge/mavlink_bridge.py logs the WS URL (minus token) on connect. Ran full backend pytest suite (21/21 PASS incl. WS reject-no-token and WS receives-broadcast). Ran frontend E2E via preview URL: login → MavLink Console → broadcast → live-stream showed a new pkt on WS, then logout. No regressions. Belt-and-braces dual-decoration is safe: FastAPI accepts both registrations and routes to a single handler (Starlette matches the first path entry). Preview WSS handshake continues to work.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "static_analysis": {
+    "server.py": "PASS — Line 533 `@app.websocket('/api/ws/mavlink')` and line 534 `@api.websocket('/ws/mavlink')` both wrap ws_mavlink. Since `api` router has prefix='/api', the second decorator also resolves to '/api/ws/mavlink' — dual bind confirmed. app.routes shows two entries with the same path and name='ws_mavlink' (verified via runtime introspection).",
+    "mavlink_bridge.py": "PASS — Line 75-76: `log.info('Subscribing to MAVLink WS at %s?token=<jwt>', url.split('?', 1)[0])` — token stripped before logging as required.",
+    "api.js": "PASS (unchanged) — wsUrl() emits wss:// or ws:// based on BASE (REACT_APP_BACKEND_URL) or same-origin fallback."
+  },
+  "backend_smoke": {
+    "ws_with_valid_token_localhost": "PASS — `ws://localhost:8001/api/ws/mavlink?token=<jwt>` accepted, hello frame received, broadcast frame received.",
+    "ws_without_token": "PASS — handshake rejected with 403 Forbidden (close code 1008). Confirmed from backend supervisor logs: 'WebSocket /api/ws/mavlink 403 connection rejected (403 Forbidden)'.",
+    "ws_via_preview_wss": "PASS — Preview URL WSS handshake completes; frontend MavlinkConsole receives {'type':'packet'} after clicking broadcast-btn (13 pkts observed in live-stream, screenshot captured)."
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_backend.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "None. The dual @app.websocket + @api.websocket decoration is functionally safe — both entries in app.routes bind to /api/ws/mavlink and Starlette's router matches the first entry. No FastAPI startup errors, no duplicate-route warnings.",
+    "User's Docker deploy must rebuild backend container (docker compose build --no-cache backend && docker compose up -d) so the updated server.py with the ws route is loaded — cannot be validated from this sandbox."
+  ],
+  "critical_code_review_comments": [
+    "Dual decoration on same function is unusual but harmless here — both resolve to the same URL (/api/ws/mavlink). Consider adding a comment explaining that this is redundant registration for robustness against a hypothetical FastAPI include_router shadowing bug.",
+    "mavlink_bridge.py cleanly strips the token from logs. Good.",
+    "Live-stream WS console warning `WebSocket is closed before the connection is established` in browser is a React StrictMode double-mount artifact — the second connect succeeds and receives frames. Not a bug."
+  ],
+  "updated_files": [],
+  "success_rate": { "backend": "21/21 (100%)", "frontend": "100% (all critical flows: login, nav-mavlink, broadcast → pkt in live-stream via WS, logout)" },
+  "test_credentials": "operator@cema.mil / cema@2026 (from /app/memory/test_credentials.md — verified working)",
+  "seed_data_creation": "3 simulated detections + 1 broadcast via test suite; 1 additional broadcast via UI E2E.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend pytest at /app/backend/tests/test_backend.py covers WS reject-no-token and WS receives-broadcast — reuse this suite for future regressions. For UI selectors see iteration_2 context.",
+  "rca of the issue": "Original user's WS 404 on their local Docker was caused by their backend container being built before the /api/ws/mavlink route was added to server.py. Iteration 3 belt-and-braces adds a second @api.websocket registration so that if any FastAPI mounting quirk shadowed the @app.websocket entry, the router-based one would still hit. Both entries verified present via app.routes runtime inspection and both requests to /api/ws/mavlink are accepted with valid token / rejected (403) without."
+}

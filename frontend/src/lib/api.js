@@ -1,6 +1,9 @@
 import axios from "axios";
 
-const BASE = process.env.REACT_APP_BACKEND_URL;
+// When empty (e.g. Docker deploy behind Nginx reverse-proxy), we use
+// same-origin relative URLs. In the Emergent preview env, this is the
+// preview URL injected at build time.
+const BASE = process.env.REACT_APP_BACKEND_URL || "";
 export const API_BASE = `${BASE}/api`;
 
 export const api = axios.create({ baseURL: API_BASE });
@@ -21,7 +24,12 @@ export function formatApiError(e) {
 }
 
 export function wsUrl(path) {
-  const u = new URL(BASE);
-  u.protocol = u.protocol === "https:" ? "wss:" : "ws:";
-  return `${u.origin}${path}`;
+  if (BASE) {
+    const u = new URL(BASE);
+    u.protocol = u.protocol === "https:" ? "wss:" : "ws:";
+    return `${u.origin}${path}`;
+  }
+  // Same-origin fallback (Docker/reverse-proxy deploy)
+  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${proto}//${window.location.host}${path}`;
 }

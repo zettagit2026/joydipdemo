@@ -43,9 +43,11 @@ services:
     build:
       context: ./frontend
       args:
-        # Frontend must know where the backend lives. In local Docker,
-        # the browser hits the host's port 8001 (not the docker network).
-        REACT_APP_BACKEND_URL: "http://localhost:8001"
+        # Empty = same-origin. Nginx inside the frontend container proxies
+        # /api/* and /api/ws/* to the backend service on the docker network.
+        # This makes the app work from ANY hostname (localhost, LAN IP,
+        # your server hostname) with zero config.
+        REACT_APP_BACKEND_URL: ""
     container_name: cema-frontend
     restart: unless-stopped
     depends_on:

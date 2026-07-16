@@ -101,7 +101,16 @@ class MavlinkBridge:
             self.write_frame(frame)
 
         def on_error(_ws, err):
-            log.warning("WS error: %s", err)
+            emsg = str(err)
+            log.warning("WS error: %s", emsg[:300])
+            if "404" in emsg:
+                log.error(
+                    "  → The backend at %s does NOT have the /api/ws/mavlink route. "
+                    "Your docker BACKEND container is running an older server.py. "
+                    "Rebuild it:  docker compose build --no-cache backend && "
+                    "docker compose up -d backend",
+                    self.client.base,
+                )
 
         def on_close(_ws, code, reason):
             log.warning("WS closed (%s %s); reconnecting in 2s", code, reason)

@@ -1,0 +1,69 @@
+{
+  "summary": "Iteration 4 verified end-to-end. Static analysis of /app/rf-bridge/hackrf_scanner.py and mavlink_bridge.py confirms the two fixes for the user's Kali/WSL bugs are correctly in place. Backend regression suite ran 29/29 PASS (21 original + 8 new for /health, /emergency/abort, /report/mission.pdf and dual-registered WS). Frontend E2E on the preview URL completed all 9 army-demo flows without functional regression: login, RESTRICTED banner, dashboard stat tiles, SystemHealth tile (Backend/MongoDB UP, HackRF/SiK DOWN as expected in sandbox), 2-click EMERGENCY ABORT, mavlink broadcast → live pkt appended via WS (rows 17→18), SafetyGate modal opens for deploy-target-PL-005 and cancels cleanly, Mission Log EXPORT PDF triggers a download, logout returns to /login. The user's actual Kali WSL bug is 100% a stale docker backend image; nothing to fix backend-side here.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {
+        "screen": "Payloads /payloads target-select",
+        "issues": ["React hydration warning: <span> cannot be a child of <option>. The <option> template uses `{d.callsign} · {d.model} · sys={d.system_id}` which is plain text so the warning most likely comes from a whitespace-preserving parent style/link elsewhere in the tree. Non-blocking; browser still renders and value is selectable."]
+      },
+      {
+        "screen": "Post-login top-right area",
+        "issues": ["Sonner ACCESS GRANTED toast (~4s duration) visually overlaps the EMERGENCY ABORT button. Interaction still works via force click but a real operator's first click may miss. Consider z-index tweak or shrinking the toast width."]
+      }
+    ]
+  },
+  "static_analysis": {
+    "rf-bridge/hackrf_scanner.py": "PASS — kill_stale_hackrf() defined at line 80, invoked at line 98 (top of check_hackrf) and at line 141 (inside run_sweep_once busy-recovery block). 300ms sleep after kill (line 99) and 500ms sleep after successful hackrf_info (line 116) release the USB handle before hackrf_sweep opens it. Error strings 'Resource busy' and '-1000' are both matched (line 139).",
+    "rf-bridge/mavlink_bridge.py": "PASS — on_error callback at line 103 inspects `emsg` for '404' (line 106) and logs the exact `docker compose build --no-cache backend && docker compose up -d backend` recovery command (lines 107-113). Token still stripped from URL log (line 75-76).",
+    "backend/server.py": "PASS — WS route /api/ws/mavlink dual-decorated (@app.websocket line 533 + @api.websocket line 534). /api/health, /api/emergency/abort, /api/report/mission.pdf all mounted on `api` router and require Depends(get_current_user)."
+  },
+  "backend_smoke": {
+    "pytest_run": "29/29 PASS (5.5s). See /app/test_reports/pytest/pytest_results.xml.",
+    "/api/health": "PASS — shape validated; backend=true, mongo=true, hackrf=false, sik_radio=false, ws_clients int, active_targets int, total_packets_tx int, server_time iso.",
+    "/api/emergency/abort": "PASS — returns {ok:true, ts:<iso>}; ABORT log entry appears in /api/logs; unauth call returns 401.",
+    "/api/report/mission.pdf": "PASS — Content-Type application/pdf, Content-Disposition attachment, body begins with %PDF-, size > 5 KB; unauth call returns 401.",
+    "ws_with_token": "PASS — hello frame received.",
+    "ws_without_token": "PASS — handshake rejected (close by server / no receive)."
+  },
+  "frontend_e2e": {
+    "login": "PASS",
+    "restricted_banner": "PASS",
+    "system_health_dashboard_tile": "PASS (4 rows visible, Backend/MongoDB UP, HackRF/SiK DOWN as expected — no hardware in sandbox)",
+    "emergency_abort_two_click": "PASS ('EMERGENCY ABORT' → 'CONFIRM ABORT' → POST)",
+    "nav_signals_mavlink_payloads_killchain_logs": "PASS",
+    "mavlink_broadcast_appends_pkt_via_ws": "PASS (17→18 pkt rows after broadcast-btn click)",
+    "safety_gate_pl005": "PASS (modal opens on deploy-target-PL-005; cancel dismisses it cleanly)",
+    "mission_report_pdf_download": "PASS (file 'cema-mission-2026-07-16T10-47-05.pdf' downloaded)",
+    "logout": "PASS (redirects to /login)"
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_backend.py",
+    "/app/backend/tests/test_new_endpoints.py",
+    "/app/test_reports/pytest/pytest_results.xml",
+    "/app/test_reports/pytest/iter4_new_endpoints.xml"
+  ],
+  "action_items": [
+    "OPTIONAL (design polish): shorten ACCESS GRANTED toast duration or move it to top-center so it doesn't overlap the EmergencyAbort button in the top-right of the header.",
+    "OPTIONAL (react warning): investigate hydration warning on Payloads target-select — a <span> is being rendered inside <option>. Options can only contain text. Likely coming from some emoji/span component or from wrapping text with a Trans component. Non-blocking.",
+    "USER-FACING (from user's original bug, not fixable here): they must run `docker compose build --no-cache backend && docker compose up -d backend` on their Kali host to pick up the new server.py containing /api/ws/mavlink. rf-bridge/mavlink_bridge.py now surfaces this hint on WS 404 error automatically."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 891 lines — nearing the 700-line split threshold. Consider splitting routers per resource (auth, detections, mavlink, payloads, logs, ws, reports) for maintainability. Not urgent.",
+    "The Mission PDF route imports its heavy reportlab deps inside the function (line 713-722) — good pattern to avoid startup cost, keep it.",
+    "SafetyGate.jsx correctly enforces 5 checkboxes + double click before firing; visible pulse-crit animation on CONFIRM is a nice UX affordance.",
+    "EmergencyAbort auto-clears the 'CONFIRM ABORT' state after 4s (useEffect timer). Good."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_new_endpoints.py (new — 8 tests for /health, /emergency/abort, /report/mission.pdf, WS handshake)"
+  ],
+  "success_rate": { "backend": "29/29 (100%)", "frontend": "100% (all 9 critical flows including new EmergencyAbort/SystemHealth/SafetyGate/PDF)" },
+  "test_credentials": "operator@cema.mil / cema@2026 (verified working from /app/memory/test_credentials.md)",
+  "seed_data_creation": "~4 simulated detections + 1 MAVLink broadcast + 1 payload PL-005 SafetyGate flow (cancelled, no fire) + 1 EMERGENCY ABORT log entry + 1 PDF report generated during frontend E2E.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Use /app/backend/tests/test_backend.py + /app/backend/tests/test_new_endpoints.py for regression. Login credentials operator@cema.mil / cema@2026. When testing the top-right EmergencyAbort button in Playwright, wait ~4-5s after login for the sonner ACCESS GRANTED toast to dismiss, otherwise the first click can be intercepted by the toast. Payloads target-select requires >=1 ACTIVE detection; simulate one via POST /api/detections/simulate first if the dropdown is empty. WS URL for MAVLink is /api/ws/mavlink (dual-registered).",
+  "rca of the issue": "User's Kali/WSL bugs are 100% caused by their local docker backend container running an older server.py. Backend rebuild = complete fix. Iteration 4 defensive fixes (hackrf zombie kill + WS 404 hint) mitigate the operator experience but do not change the sandbox behaviour, which was already correct."
+}

@@ -77,8 +77,27 @@ def load_cfg() -> SweepConfig:
     )
 
 
+def kill_stale_hackrf() -> None:
+    """Kill any zombie hackrf_sweep / hackrf_transfer processes that might
+    still be holding the USB device from a previous run."""
+    for proc_name in ("hackrf_sweep", "hackrf_transfer"):
+        try:
+            subprocess.run(["pkill", "-9", "-f", proc_name],
+                           capture_output=True, timeout=3)
+        except Exception:
+            pass
+
+
 def check_hackrf() -> bool:
-    """Verify hackrf_sweep is on PATH and a HackRF is attached."""
+    """Verify hackrf_sweep is on PATH and a HackRF is attached.
+
+    IMPORTANT: hackrf_info opens the USB device and briefly holds it. We
+    kill any stale processes first, then release for a moment before the
+    caller does the real sweep.
+    """
+    kill_stale_hackrf()
+    time.sleep(0.3)
+
     try:
         r = subprocess.run(["hackrf_info"], capture_output=True, text=True, timeout=5)
     except FileNotFoundError:
@@ -90,7 +109,11 @@ def check_hackrf() -> bool:
     if r.returncode != 0 or "Found HackRF" not in r.stdout:
         log.error("No HackRF detected.\n%s\n%s", r.stdout, r.stderr)
         return False
-    log.info("HackRF present:\n%s", r.stdout.splitlines()[0] if r.stdout else "?")
+    log.info("HackRF present: %s", r.stdout.splitlines()[0] if r.stdout else "?")
+
+    # Give the USB stack a moment to release the handle from hackrf_info
+    # before the first hackrf_sweep opens it.
+    time.sleep(0.5)
     return True
 
 
@@ -111,8 +134,14 @@ def run_sweep_once(cfg_: SweepConfig) -> List[Tuple[float, float]]:
         log.warning("hackrf_sweep timed out after 120s — HackRF may be stuck. Try replug.")
         return []
     if proc.returncode != 0:
-        log.warning("hackrf_sweep rc=%d stderr=%s",
-                    proc.returncode, (proc.stderr or "")[:400])
+        stderr = (proc.stderr or "")[:400]
+        log.warning("hackrf_sweep rc=%d stderr=%s", proc.returncode, stderr)
+        if "Resource busy" in stderr or "-1000" in stderr:
+            log.warning("  HackRF is held by another process. Trying to recover…")
+            kill_stale_hackrf()
+            time.sleep(1.0)
+        elif "HACKRF_ERROR_NOT_FOUND" in stderr or "-5" in stderr:
+            log.error("  HackRF unplugged / lost — check USB cable and re-attach.")
 
     if not proc.stdout:
         log.warning("hackrf_sweep produced no output. stderr=%s", (proc.stderr or "")[:400])

@@ -651,6 +651,226 @@ async def list_logs(limit: int = 200, user: Dict = Depends(get_current_user)):
 
 
 # =====================================================================
+# Routes: System health (dashboard tile + pre-demo check)
+# =====================================================================
+@api.get("/health")
+async def system_health(user: Dict = Depends(get_current_user)):
+    # Mongo ping
+    mongo_ok = True
+    try:
+        await db.command("ping")
+    except Exception:
+        mongo_ok = False
+
+    # HackRF live if we have a spectrum ingest within 10s
+    ing = _last_spectrum_ingest
+    hackrf_live = bool(ing and (datetime.now(timezone.utc) - ing["ts"]).total_seconds() < 10)
+
+    # SiK live if any detection with source SIK_RADIO seen in last 60s
+    since = datetime.now(timezone.utc) - timedelta(seconds=60)
+    sik_count = await db.detections.count_documents({
+        "source": "SIK_RADIO",
+        "last_seen": {"$gt": since.isoformat()},
+    })
+
+    active_targets = await db.detections.count_documents({"status": "ACTIVE"})
+    total_packets = await db.mav_packets.count_documents({})
+
+    return {
+        "backend": True,
+        "mongo": mongo_ok,
+        "hackrf": hackrf_live,
+        "sik_radio": sik_count > 0,
+        "ws_clients": len(ws_manager.clients),
+        "active_targets": active_targets,
+        "total_packets_tx": total_packets,
+        "server_time": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+# =====================================================================
+# Routes: Emergency abort — halt all transmissions, mark ceasefire
+# =====================================================================
+@api.post("/emergency/abort")
+async def emergency_abort(user: Dict = Depends(get_current_user)):
+    # Broadcast a ceasefire signal to any listening TX bridge.
+    await ws_manager.broadcast_json({
+        "type": "abort",
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "operator": user["email"],
+    })
+    await log_event("ABORT",
+                    "EMERGENCY ABORT — all TX halted by operator",
+                    actor=user["email"])
+    return {"ok": True, "ts": datetime.now(timezone.utc).isoformat()}
+
+
+# =====================================================================
+# Routes: Mission PDF report (leave-behind for evaluators)
+# =====================================================================
+@api.get("/report/mission.pdf")
+async def mission_pdf(user: Dict = Depends(get_current_user)):
+    from io import BytesIO
+    import hashlib
+    from fastapi.responses import Response
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.lib import colors
+    from reportlab.platypus import (
+        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak,
+    )
+
+    detections = await db.detections.find({}, {"_id": 0}).to_list(1000)
+    packets    = await db.mav_packets.find({}, {"_id": 0}).sort("ts", -1).to_list(500)
+    logs       = await db.mission_log.find({}, {"_id": 0}).sort("ts", 1).to_list(2000)
+
+    # Build a simple hash chain over log events for tamper-evident audit trail
+    prev = ""
+    hash_chain = []
+    for e in logs:
+        h = hashlib.sha256(f"{prev}|{e['ts']}|{e['kind']}|{e['message']}|{e['actor']}".encode()).hexdigest()
+        hash_chain.append(h)
+        prev = h
+    final_hash = prev or "0" * 64
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4,
+                            leftMargin=15*mm, rightMargin=15*mm,
+                            topMargin=15*mm, bottomMargin=15*mm)
+    S = getSampleStyleSheet()
+
+    red_banner = ParagraphStyle(
+        "RedBanner", parent=S["Normal"],
+        alignment=1, textColor=colors.white, backColor=colors.red,
+        fontName="Helvetica-Bold", fontSize=9, leading=14,
+    )
+    title = ParagraphStyle("Title", parent=S["Title"], fontSize=22, leading=26,
+                           spaceAfter=6, textColor=colors.HexColor("#0C111D"))
+    h2 = ParagraphStyle("h2", parent=S["Heading2"], fontSize=12,
+                        textColor=colors.HexColor("#00758F"), spaceBefore=10, spaceAfter=4)
+    mono = ParagraphStyle("mono", parent=S["Normal"], fontName="Courier",
+                          fontSize=7.5, leading=9)
+    body = ParagraphStyle("body", parent=S["Normal"], fontSize=9, leading=12)
+
+    story = []
+    story.append(Paragraph("// RESTRICTED — INDIAN MINISTRY OF DEFENCE — CEMA-cUAS EVAL //", red_banner))
+    story.append(Spacer(1, 6))
+    story.append(Paragraph("CEMA cUAS · Mission Report", title))
+    story.append(Paragraph(
+        f"Session: <b>{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}</b> · "
+        f"Operator: <b>{user.get('email','?')}</b> · "
+        f"Clearance: <b>{user.get('clearance','RESTRICTED')}</b>", body))
+    story.append(Spacer(1, 8))
+
+    # Summary tile
+    active = sum(1 for d in detections if d["status"] == "ACTIVE")
+    neutralized = sum(1 for d in detections if d["status"] == "NEUTRALIZED")
+    story.append(Paragraph("Executive Summary", h2))
+    sum_tbl = Table(
+        [
+            ["Contacts detected", str(len(detections)), "Active", str(active)],
+            ["Neutralized", str(neutralized), "MAVLink packets emitted", str(len(packets))],
+            ["Mission log entries", str(len(logs)), "Audit chain hash", final_hash[:16] + "…"],
+        ],
+        colWidths=[45*mm, 25*mm, 45*mm, 55*mm],
+    )
+    sum_tbl.setStyle(TableStyle([
+        ("FONT", (0,0), (-1,-1), "Helvetica", 9),
+        ("BACKGROUND", (0,0), (0,-1), colors.HexColor("#E8EEF5")),
+        ("BACKGROUND", (2,0), (2,-1), colors.HexColor("#E8EEF5")),
+        ("BOX", (0,0), (-1,-1), 0.5, colors.grey),
+        ("GRID", (0,0), (-1,-1), 0.25, colors.lightgrey),
+    ]))
+    story.append(sum_tbl)
+
+    # Contacts table
+    story.append(Paragraph("Detected Contacts", h2))
+    rows = [["CALLSIGN", "MODEL", "PROTOCOL", "FREQ (GHz)", "RSSI", "SRC", "CEMA", "KC", "STATUS"]]
+    for d in detections[:60]:
+        rows.append([
+            d.get("callsign",""), d.get("model","")[:20], d.get("protocol","")[:14],
+            f"{d.get('center_freq_ghz',0):.4f}", f"{d.get('rssi_dbm',0):.1f}",
+            d.get("source","SIM"), d.get("cema_stage",""),
+            d.get("kill_chain_stage",""), d.get("status",""),
+        ])
+    t = Table(rows, colWidths=[20*mm, 30*mm, 24*mm, 20*mm, 12*mm, 18*mm, 18*mm, 14*mm, 20*mm])
+    t.setStyle(TableStyle([
+        ("FONT", (0,0), (-1,-1), "Helvetica", 7),
+        ("FONT", (0,0), (-1,0), "Helvetica-Bold", 7),
+        ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#0C111D")),
+        ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+        ("GRID", (0,0), (-1,-1), 0.2, colors.lightgrey),
+        ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+        ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.white, colors.HexColor("#F4F6FA")]),
+    ]))
+    story.append(t)
+
+    # MAVLink packets emitted
+    story.append(Paragraph("MAVLink Packets Transmitted", h2))
+    prows = [["TS (UTC)", "MSGID", "TGT SYS", "PAYLOAD", "SEVERITY", "LEN", "HEX (first 32B)"]]
+    for p in packets[:40]:
+        hexs = (p.get("hex","") or "")[:64]
+        prows.append([
+            (p.get("ts","")[:19]).replace("T"," "),
+            str(p.get("decoded",{}).get("message_id","")),
+            str(p.get("target_system","")),
+            p.get("payload_name","-") or "-",
+            p.get("severity","-") or "-",
+            str(p.get("length","")),
+            hexs,
+        ])
+    pt = Table(prows, colWidths=[28*mm, 15*mm, 15*mm, 30*mm, 20*mm, 12*mm, 55*mm])
+    pt.setStyle(TableStyle([
+        ("FONT", (0,0), (-1,-1), "Courier", 6.5),
+        ("FONT", (0,0), (-1,0), "Helvetica-Bold", 7),
+        ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#0C111D")),
+        ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+        ("GRID", (0,0), (-1,-1), 0.2, colors.lightgrey),
+        ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.white, colors.HexColor("#F4F6FA")]),
+    ]))
+    story.append(pt)
+
+    # Mission log (hash-chained)
+    story.append(PageBreak())
+    story.append(Paragraph("Chronological Audit Trail (SHA-256 chained)", h2))
+    lrows = [["#", "TS (UTC)", "KIND", "MESSAGE", "ACTOR", "HASH"]]
+    for i, (e, h) in enumerate(zip(logs, hash_chain), start=1):
+        lrows.append([
+            str(i), (e.get("ts","")[:19]).replace("T"," "),
+            e.get("kind",""), (e.get("message","") or "")[:65],
+            e.get("actor",""), h[:12] + "…",
+        ])
+    lt = Table(lrows, colWidths=[8*mm, 30*mm, 18*mm, 70*mm, 30*mm, 25*mm], repeatRows=1)
+    lt.setStyle(TableStyle([
+        ("FONT", (0,0), (-1,-1), "Courier", 6),
+        ("FONT", (0,0), (-1,0), "Helvetica-Bold", 7),
+        ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#0C111D")),
+        ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+        ("GRID", (0,0), (-1,-1), 0.15, colors.lightgrey),
+        ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.white, colors.HexColor("#F4F6FA")]),
+    ]))
+    story.append(lt)
+
+    story.append(Spacer(1, 10))
+    story.append(Paragraph(
+        f"<b>Final chain hash:</b> <font face='Courier'>{final_hash}</font>", mono))
+    story.append(Paragraph(
+        "Any modification to prior log entries would invalidate this hash.", body))
+    story.append(Spacer(1, 6))
+    story.append(Paragraph("// RESTRICTED — NOT FOR OPERATIONAL USE //", red_banner))
+
+    doc.build(story)
+    pdf_bytes = buf.getvalue()
+    fname = f"cema-mission-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+# =====================================================================
 # Public health
 # =====================================================================
 @api.get("/")

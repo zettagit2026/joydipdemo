@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, formatApiError } from "@/lib/api";
 import { toast } from "sonner";
 import { Bomb, AlertTriangle, Target as TargetIcon } from "lucide-react";
+import SafetyGate, { SAFETY_GATED } from "@/components/SafetyGate";
 
 const SEV_COLOR = {
   LOW: "var(--accent-success)",
@@ -21,6 +22,7 @@ export default function Payloads() {
   const [payloads, setPayloads] = useState([]);
   const [dets, setDets] = useState([]);
   const [target, setTarget] = useState("");
+  const [gate, setGate] = useState({ open: false, pl: null, broadcast: false });
 
   const load = async () => {
     try {
@@ -33,7 +35,7 @@ export default function Payloads() {
   };
   useEffect(() => { load(); const id = setInterval(load, 5000); return () => clearInterval(id); }, []); // eslint-disable-line
 
-  const deploy = async (pl, broadcast) => {
+  const doDeploy = async (pl, broadcast) => {
     if (!broadcast && !target) { toast.error("No active target selected"); return; }
     try {
       const { data } = await api.post("/payloads/deploy", {
@@ -46,6 +48,14 @@ export default function Payloads() {
       });
       load();
     } catch (e) { toast.error("Deploy failed", { description: formatApiError(e) }); }
+  };
+
+  const deploy = (pl, broadcast) => {
+    if (SAFETY_GATED.has(pl.id)) {
+      setGate({ open: true, pl, broadcast });
+      return;
+    }
+    doDeploy(pl, broadcast);
   };
 
   return (
@@ -139,6 +149,17 @@ export default function Payloads() {
           </div>
         ))}
       </div>
+      <SafetyGate
+        open={gate.open}
+        payloadName={gate.pl?.name}
+        severity={gate.pl?.severity}
+        onClose={() => setGate({ open: false, pl: null, broadcast: false })}
+        onConfirm={() => {
+          const { pl, broadcast } = gate;
+          setGate({ open: false, pl: null, broadcast: false });
+          doDeploy(pl, broadcast);
+        }}
+      />
     </div>
   );
 }

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api, formatApiError } from "@/lib/api";
 import { toast } from "sonner";
 import { Radar, Plus, Skull, Activity, Signal, TrendingUp } from "lucide-react";
+import SystemHealth from "@/components/SystemHealth";
 
 const THREAT_COLOR = {
   LOW: "var(--accent-success)",
@@ -262,11 +263,12 @@ export default function Dashboard() {
           </div>
         </div>
 
-        <div className="tactical-border" style={{ background: "var(--bg-surface)" }}>
-          <div className="tactical-border-b px-4 py-3 flex items-center gap-2">
-            <Skull size={14} strokeWidth={1.5} style={{ color: "var(--accent-critical)" }} />
-            <span className="font-mono text-xs uppercase tracking-widest">Priority Targets</span>
-          </div>
+        <div className="space-y-6">
+          <div className="tactical-border" style={{ background: "var(--bg-surface)" }}>
+            <div className="tactical-border-b px-4 py-3 flex items-center gap-2">
+              <Skull size={14} strokeWidth={1.5} style={{ color: "var(--accent-critical)" }} />
+              <span className="font-mono text-xs uppercase tracking-widest">Priority Targets</span>
+            </div>
           <div className="p-4 space-y-3">
             {active
               .slice()
@@ -297,6 +299,8 @@ export default function Dashboard() {
               <div className="font-mono text-xs text-slate-600 text-center py-4">— NO ACTIVE TARGETS —</div>
             )}
           </div>
+          </div>
+          <SystemHealth />
         </div>
       </div>
     </div>

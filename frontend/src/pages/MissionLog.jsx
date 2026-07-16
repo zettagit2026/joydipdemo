@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { api, formatApiError } from "@/lib/api";
+import { api, formatApiError, API_BASE } from "@/lib/api";
 import { toast } from "sonner";
-import { ScrollText } from "lucide-react";
+import { ScrollText, FileDown } from "lucide-react";
 
 const KIND_COLOR = {
   AUTH: "var(--accent-info)",
@@ -23,15 +23,48 @@ export default function MissionLog() {
   };
   useEffect(() => { load(); const id = setInterval(load, 4000); return () => clearInterval(id); }, []);
 
+  const downloadPdf = async () => {
+    try {
+      toast.info("Generating classified report…");
+      const token = localStorage.getItem("cema_token");
+      const res = await fetch(`${API_BASE}/report/mission.pdf`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `cema-mission-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast.success("Mission report downloaded");
+    } catch (e) {
+      toast.error("Report failed", { description: e.message });
+    }
+  };
+
   return (
     <div className="space-y-6">
-      <div>
-        <div className="font-mono text-[10px] uppercase tracking-widest text-slate-500 mb-1">
-          <ScrollText size={12} className="inline mr-2" strokeWidth={1.5} /> Mission Log
+      <div className="flex items-end justify-between">
+        <div>
+          <div className="font-mono text-[10px] uppercase tracking-widest text-slate-500 mb-1">
+            <ScrollText size={12} className="inline mr-2" strokeWidth={1.5} /> Mission Log
+          </div>
+          <h1 className="font-heading font-black text-5xl uppercase tracking-tighter">
+            Audit Trail
+          </h1>
         </div>
-        <h1 className="font-heading font-black text-5xl uppercase tracking-tighter">
-          Audit Trail
-        </h1>
+        <button
+          data-testid="report-pdf-btn"
+          onClick={downloadPdf}
+          className="flex items-center gap-2 px-4 py-2 tactical-border font-mono text-xs uppercase tracking-widest hover:bg-[#00F0FF] hover:text-black transition-colors scanline-btn"
+          style={{ color: "var(--accent-info)", borderColor: "var(--accent-info)" }}
+        >
+          <FileDown size={14} strokeWidth={1.5} /> EXPORT MISSION REPORT (PDF)
+        </button>
       </div>
 
       <div className="tactical-border" style={{ background: "var(--bg-terminal)" }}>

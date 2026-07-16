@@ -1,5 +1,6 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { ClassificationBanner } from "@/components/ClassificationBanner";
+import EmergencyAbort from "@/components/EmergencyAbort";
 import { useAuth } from "@/context/AuthContext";
 import {
   Radar, Waves, Radio, Bomb, Crosshair, ScrollText, LogOut, Terminal, Shield,
@@ -79,19 +80,22 @@ export default function Layout() {
         {/* Main */}
         <main className="flex-1 min-w-0 flex flex-col">
           <div
-            className="tactical-border-b px-8 py-3 flex items-center justify-between"
+            className="tactical-border-b px-8 py-3 flex items-center justify-between gap-4"
             style={{ background: "var(--bg-surface)" }}
           >
-            <div className="font-mono text-[10px] uppercase tracking-widest text-slate-500">
+            <div className="font-mono text-[10px] uppercase tracking-widest text-slate-500 min-w-0 truncate">
               <Terminal size={12} className="inline mr-2" strokeWidth={1.5} />
               <span className="text-slate-300">SECURE CHANNEL</span>
               <span className="mx-3">|</span>
               <span style={{ color: "var(--accent-success)" }}>● LINK-16 UP</span>
               <span className="mx-3">|</span>
-              <span style={{ color: "var(--accent-info)" }}>SDR: BLADERF-2 · 70MHz–6GHz</span>
+              <span style={{ color: "var(--accent-info)" }}>SDR: HACKRF · 1MHz–6GHz</span>
             </div>
-            <div className="font-mono text-[10px] uppercase tracking-widest text-slate-500">
-              MISSION-ID: <span className="text-white">CEMA-2026-{new Date().getFullYear()}-A</span>
+            <div className="flex items-center gap-4 shrink-0">
+              <div className="font-mono text-[10px] uppercase tracking-widest text-slate-500">
+                MISSION-ID: <span className="text-white">CEMA-2026-{new Date().getFullYear()}-A</span>
+              </div>
+              <EmergencyAbort />
             </div>
           </div>
 
